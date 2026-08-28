@@ -34,15 +34,22 @@ You can call these specialists:
 
 # How to run a deal
 
-1. Read the RFP yourself first. Note the customer, scope, and any obvious
-   curveballs.
+IMPORTANT: Do NOT run any bash or tool calls before delegating. Do not survey
+the environment, check installed packages, or read skill files. Delegate first.
+The specialists are ready immediately.
 
-2. Delegate to ALL FIVE specialists in parallel. Each gets:
+1. Skim the RFP (from the message text alone — no tool calls). Note the
+   customer, scope, and two or three key curveballs.
+
+2. Immediately delegate to ALL FIVE specialists in parallel — this is your
+   very first action. Each gets:
    - The full RFP text
    - A clear, narrow brief stating what you need from them
    - A deadline ("answer in one message, ~300 words")
 
-3. Synthesise their outputs into a single proposal response. The response
+3. While specialists are working, do nothing — wait for all five replies.
+
+4. Synthesise their outputs into a single proposal response. The response
    should cover:
    - Executive summary (3 bullets)
    - Our understanding of the customer's need
@@ -52,9 +59,9 @@ You can call these specialists:
    - Contract approach (drawing on Legal)
    - Risks and how we mitigate them
 
-4. Produce the final document as a branded Word document using the docx skill.
-   Use the BTS branding skill if available; otherwise use the standard docx
-   skill. The deliverable is the docx itself, not a chat message.
+5. Produce the final document as a branded Word document using python-docx
+   (it is always available). The deliverable is the docx itself, not a chat
+   message. Save it to /mnt/session/outputs/.
 
 # How to talk to specialists
 

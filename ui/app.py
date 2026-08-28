@@ -102,33 +102,47 @@ def build_context(rfp_text: str, extras: list[tuple[str, str]]) -> str:
 def detect_deal_health(text: str) -> tuple[str, str, str]:
     """Return (colour_hex, emoji, label) based on coordinator output."""
     lower = text.lower()
-    if any(w in lower for w in ["walk-away", "walk away", "no-go", "decline", "reject"]):
-        return "#c0392b", "🔴", "HIGH RISK — Walk-away conditions present. Review before proceeding."
-    if any(w in lower for w in ["blocker", "hard block", "uncapped liability", "refused"]):
+    # RED: only explicit outright rejection language
+    red_phrases = [
+        "recommend declining", "do not proceed", "do not recommend",
+        "formal decline", "walk away from this deal", "recommend we walk",
+        "our recommendation is to decline",
+    ]
+    if any(p in lower for p in red_phrases):
+        return "#c0392b", "🔴", "HIGH RISK — Recommend declining. Senior review required."
+    # AMBER: legal or commercial blockers that need negotiation
+    amber_phrases = [
+        "hard blocker", "blocker", "uncapped liability", "legal risk",
+        "commercial risk", "red-line", "redline", "must be resolved",
+    ]
+    if any(p in lower for p in amber_phrases):
         return "#e67e22", "🟡", "AMBER — Blockers identified. Negotiation required before signing."
     return "#27ae60", "🟢", "GREEN — Strong fit. Proceed to negotiation."
 
 
 def extract_summary_bullets(text: str) -> list[str]:
-    """Pull bold-prefixed lines from 'What the desk concluded' section."""
-    match = re.search(
-        r"(?:What the desk concluded|SUMMARY|summary)[:\s\n]+(.+?)(?=\n##|\Z)",
-        text, re.DOTALL | re.IGNORECASE,
+    """Pull bold category lines from the synthesis section of coordinator output."""
+    # Anchor to the synthesis section — everything before delegation is noise
+    # Try the explicit heading first
+    anchor = re.search(
+        r"(?:##\s*What the desk concluded|All five specialists.*?Synthesis)",
+        text, re.IGNORECASE | re.DOTALL,
     )
-    section = match.group(1) if match else text
+    section = text[anchor.start():] if anchor else text
 
+    # Extract **Category — verdict.** First-sentence... lines
     bullets = re.findall(
-        r"\*\*(.+?)\*\*\s*[—–-]\s*(.+?)(?=\n\n|\n\*\*|\Z)",
-        section, re.DOTALL,
+        r"\*\*([^*]{3,60})\*\*\s*[—–\-\.]\s*([^\n]{20,})",
+        section,
     )
     if bullets:
         return [
-            f"**{title.strip()}** — {body.strip()[:200].rstrip()}"
+            f"**{title.strip()}** — {body.strip()[:220].rstrip('.,')}"
             for title, body in bullets[:5]
         ]
 
-    # Fallback: first 5 non-empty sentences
-    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) > 40]
+    # Fallback: pull sentences from the synthesis section only
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", section) if len(s.strip()) > 50]
     return sentences[:5]
 
 
