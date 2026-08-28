@@ -248,9 +248,13 @@ def run_swarm(
         environment_id=environment_id,
         title="Deal Desk — RFP",
     )
-    add("🚀", "Deal Desk session started — coordinator ready", colour="#6c5ce7")
+    add("🚀", "Deal Desk session started — coordinator reading RFP…", colour="#6c5ce7")
 
     final_text_parts: list[str] = []
+    # Two-phase completion: wait for specialists, then wait for synthesis.
+    # session.status_idle can fire between phases — only break after synthesis text arrives.
+    specialists_done = False
+    synthesis_started = False
 
     with client.beta.sessions.events.stream(session.id) as stream:
         client.beta.sessions.events.send(
@@ -298,22 +302,31 @@ def run_swarm(
                     render_specialist_cards(card_holders, statuses, specialist_content)
                 add("✅", f"**{display}** analysis complete", colour="#27ae60")
 
+                if all(statuses[s] == "done" for s in ALL_SPECIALISTS):
+                    specialists_done = True
+                    add("📝", "All specialists done — coordinator synthesising…", colour="#e67e22")
+
             elif t == "agent.message":
                 for block in getattr(event, "content", []):
                     if getattr(block, "type", None) == "text":
                         final_text_parts.append(block.text)
+                        if specialists_done:
+                            synthesis_started = True
 
             elif t == "agent.tool_use":
                 pass  # hide all tool calls — not meaningful to business users
 
             elif t == "session.status_idle":
-                all_done = all(statuses[s] == "done" for s in ALL_SPECIALISTS)
-                if all_done:
-                    add("📝", "Synthesising inputs into final proposal…", colour="#e67e22")
+                if specialists_done and synthesis_started:
+                    # Coordinator has finished — both phases complete
                     break
+                elif specialists_done:
+                    # Idle between specialist replies and synthesis starting — keep waiting
+                    pass
                 else:
                     waiting = [s for s in ALL_SPECIALISTS if statuses[s] != "done"]
-                    add("⏳", f"Waiting for: {', '.join(waiting)}", colour="#95a5a6")
+                    if waiting:
+                        add("⏳", f"Waiting for: {', '.join(waiting)}", colour="#95a5a6")
 
     add("📄", "Checking for deliverable files…", colour="#6c5ce7")
 

@@ -91,6 +91,8 @@ def main() -> None:
     print("\n=== EVENT STREAM (this is the demo) ===\n")
     final_text_parts: list[str] = []
     all_replies = 0
+    specialists_done = False
+    synthesis_started = False
 
     with client.beta.sessions.events.stream(session.id) as stream:
         client.beta.sessions.events.send(
@@ -112,6 +114,9 @@ def main() -> None:
             elif t == "agent.thread_message_received":
                 all_replies += 1
                 print(f"  [reply ←]          {event.from_agent_name}", flush=True)
+                if all_replies >= 5:
+                    specialists_done = True
+                    print("  [all specialists replied — waiting for synthesis]", flush=True)
             elif t == "agent.thread_message_sent":
                 print(f"  [delegate →]       {event.to_agent_name}", flush=True)
             elif t == "agent.message":
@@ -119,14 +124,15 @@ def main() -> None:
                     if getattr(block, "type", None) == "text":
                         final_text_parts.append(block.text)
                         print(block.text, end="", flush=True)
+                        if specialists_done:
+                            synthesis_started = True
             elif t == "agent.tool_use":
                 print(f"\n  [tool: {getattr(event, 'name', '?')}]", flush=True)
             elif t == "session.status_idle":
-                # Don't stop until all specialist replies are in
-                if all_replies >= 5:
+                if specialists_done and synthesis_started:
                     print("\n\n[swarm finished]")
                     break
-                else:
+                elif not specialists_done:
                     print(f"\n  [idle — waiting for specialists, {all_replies}/5 replied]", flush=True)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
