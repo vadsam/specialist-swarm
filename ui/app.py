@@ -141,14 +141,28 @@ def render_timeline(placeholder, events: list[dict]) -> None:
     if not events:
         placeholder.empty()
         return
-    rows = "".join(
-        f"<tr><td style='padding:4px 8px;font-size:18px'>{e['icon']}</td>"
-        f"<td style='padding:4px 12px;color:#888;white-space:nowrap'>{e['elapsed']}</td>"
-        f"<td style='padding:4px 8px'>{e['text']}</td></tr>"
-        for e in events
-    )
+
+    items = ""
+    for i, e in enumerate(events):
+        is_last = i == len(events) - 1
+        colour   = e.get("colour", "#3498db")
+        pulse    = "animation:pulse 1.2s ease-in-out infinite" if is_last else ""
+        items += (
+            f"<div style='position:relative;padding:5px 0 5px 44px;min-height:30px'>"
+            f"  <div style='position:absolute;left:7px;top:8px;width:14px;height:14px;"
+            f"              border-radius:50%;background:{colour};border:2px solid white;"
+            f"              box-shadow:0 0 0 2px {colour};{pulse}'></div>"
+            f"  <span style='color:#aaa;font-size:12px;margin-right:10px'>{e['elapsed']}</span>"
+            f"  <span style='font-size:14px'>{e['icon']}&nbsp;{e['text']}</span>"
+            f"</div>"
+        )
+
     placeholder.markdown(
-        f"<table style='width:100%;border-collapse:collapse'>{rows}</table>",
+        f"<style>@keyframes pulse{{0%,100%{{opacity:1}}50%{{opacity:.35}}}}</style>"
+        f"<div style='position:relative;padding:4px 0'>"
+        f"  <div style='position:absolute;left:13px;top:0;bottom:0;width:2px;background:#e8e8e8'></div>"
+        f"  {items}"
+        f"</div>",
         unsafe_allow_html=True,
     )
 
@@ -198,8 +212,8 @@ def run_swarm(
     def elapsed() -> str:
         return f"{time.time() - t0:.0f}s"
 
-    def add(icon: str, text: str) -> None:
-        timeline_events.append({"icon": icon, "elapsed": elapsed(), "text": text})
+    def add(icon: str, text: str, colour: str = "#3498db") -> None:
+        timeline_events.append({"icon": icon, "elapsed": elapsed(), "text": text, "colour": colour})
         render_timeline(timeline_placeholder, timeline_events)
 
     user_message = (
@@ -220,7 +234,7 @@ def run_swarm(
         environment_id=environment_id,
         title="Deal Desk — RFP",
     )
-    add("🚀", f"Session opened — coordinator ready ({session.id[:16]}…)")
+    add("🚀", "Deal Desk session started — coordinator ready", colour="#6c5ce7")
 
     final_text_parts: list[str] = []
 
@@ -239,7 +253,7 @@ def run_swarm(
             if t == "session.thread_created":
                 agent_name = getattr(event, "agent_name", "")
                 display    = SPECIALIST_MAP.get(agent_name, agent_name)
-                add(SPECIALIST_ICONS.get(display, "📤"), f"Dispatched to **{display}**")
+                add(SPECIALIST_ICONS.get(display, "📤"), f"Dispatched to **{display}**", colour="#3498db")
                 if display in statuses:
                     statuses[display] = "running"
                     render_specialist_cards(card_holders, statuses, specialist_content)
@@ -252,15 +266,12 @@ def run_swarm(
                     render_specialist_cards(card_holders, statuses, specialist_content)
 
             elif t == "agent.thread_message_sent":
-                to_name = getattr(event, "to_agent_name", "")
-                display = SPECIALIST_MAP.get(to_name, to_name)
-                add("📨", f"RFP brief sent to **{display}**")
+                pass  # dispatch already shown on thread_created
 
             elif t == "agent.thread_message_received":
                 from_name = getattr(event, "from_agent_name", "")
                 display   = SPECIALIST_MAP.get(from_name, from_name)
 
-                # Capture reply text if available on this event
                 reply_text = ""
                 for block in getattr(event, "content", []) or []:
                     if getattr(block, "type", None) == "text":
@@ -271,7 +282,7 @@ def run_swarm(
                 if display in statuses:
                     statuses[display] = "done"
                     render_specialist_cards(card_holders, statuses, specialist_content)
-                add("✅", f"**{display}** replied")
+                add("✅", f"**{display}** analysis complete", colour="#27ae60")
 
             elif t == "agent.message":
                 for block in getattr(event, "content", []):
@@ -279,20 +290,18 @@ def run_swarm(
                         final_text_parts.append(block.text)
 
             elif t == "agent.tool_use":
-                tool_name = getattr(event, "name", "tool")
-                if tool_name in ("bash", "computer"):
-                    add("⚙️", f"Coordinator running: `{tool_name}`")
+                pass  # hide all tool calls — not meaningful to business users
 
             elif t == "session.status_idle":
                 all_done = all(statuses[s] == "done" for s in ALL_SPECIALISTS)
                 if all_done:
-                    add("🏁", "All specialists replied — synthesis in progress…")
+                    add("📝", "Synthesising inputs into final proposal…", colour="#e67e22")
                     break
                 else:
                     waiting = [s for s in ALL_SPECIALISTS if statuses[s] != "done"]
-                    add("⏳", f"Still waiting for: {', '.join(waiting)}")
+                    add("⏳", f"Waiting for: {', '.join(waiting)}", colour="#95a5a6")
 
-    add("📄", "Checking for deliverable files…")
+    add("📄", "Checking for deliverable files…", colour="#6c5ce7")
 
     docx_files: list[tuple[str, bytes]] = []
     try:
@@ -309,7 +318,7 @@ def run_swarm(
                     docx_bytes = fh.read()
                 Path(tmp_path).unlink(missing_ok=True)
                 docx_files.append((f.filename, docx_bytes))
-                add("📥", f"Proposal ready: `{f.filename}`")
+                add("📥", f"Proposal ready: **{f.filename}**", colour="#27ae60")
     except Exception as exc:
         add("⚠️", f"File retrieval error: {type(exc).__name__}: {exc}")
 
