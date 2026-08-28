@@ -20,6 +20,17 @@ from pathlib import Path
 
 from anthropic import Anthropic
 
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    for _d in [Path(__file__).parent, *Path(__file__).parent.parents]:
+        _env = _d / ".env"
+        if _env.exists():
+            for _line in _env.read_text().splitlines():
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip())
+            break
+
 
 SPECIALISTS = [
     {
