@@ -20,9 +20,10 @@ from anthropic.lib import files_from_dir
 
 # Map skill directory name → specialist key that should get it
 SKILL_TO_SPECIALIST = {
-    "pricing-playbook": "pricing",
-    "legal-checklist":  "legal",
-    "competitive-intel": "competitive",
+    "pricing-playbook":     "pricing",
+    "legal-checklist":      "legal",
+    "competitive-intel":    "competitive",
+    "solution-architecture": "architect",
 }
 
 
@@ -38,12 +39,12 @@ def main() -> None:
     client = Anthropic()
 
     # List existing custom skills so we can detect and reuse any prior uploads.
-    # Skills API enforces unique display_title, so retrying with the same title
+    # Skills API enforces unique display_name, so retrying with the same title
     # would otherwise fail. Idempotent retry is essential for hackathon dev loops.
     print("Checking for existing skills...")
     existing_by_title: dict[str, str] = {}
     for page in client.beta.skills.list(source="custom"):
-        existing_by_title[page.display_title] = page.id
+        existing_by_title[page.display_name] = page.id
 
     uploaded: dict[str, str] = {}
 
@@ -53,17 +54,17 @@ def main() -> None:
             print(f"  Skipping {skill_name} — no SKILL.md found")
             continue
 
-        display_title = skill_name.replace("-", " ").title()
+        display_name = skill_name.replace("-", " ").title()
 
         # 1. Upload the skill (or reuse if one already exists with this title)
-        if display_title in existing_by_title:
-            skill_id = existing_by_title[display_title]
+        if display_name in existing_by_title:
+            skill_id = existing_by_title[display_name]
             print(f"Reusing existing skill: {skill_name} ({skill_id})")
             uploaded[skill_name] = skill_id
         else:
             print(f"Uploading skill: {skill_name}...")
             skill = client.beta.skills.create(
-                display_title=display_title,
+                display_name=display_name,
                 files=files_from_dir(str(skill_dir)),
             )
             uploaded[skill_name] = skill.id

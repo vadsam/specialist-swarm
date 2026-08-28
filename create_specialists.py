@@ -25,7 +25,7 @@ SPECIALISTS = [
     {
         "key": "pricing",
         "name": "Pricing Specialist",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5",
         "system": (
             "You are the Pricing Specialist in a Deal Desk. Your job is to "
             "recommend commercial terms for inbound RFPs.\n\n"
@@ -44,7 +44,7 @@ SPECIALISTS = [
     {
         "key": "legal",
         "name": "Legal Reviewer",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5",
         "system": (
             "You are the Legal Reviewer in a Deal Desk. Your job is to read "
             "an RFP and flag every clause that conflicts with our standard "
@@ -64,7 +64,7 @@ SPECIALISTS = [
     {
         "key": "technical_fit",
         "name": "Technical Fit Specialist",
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-5",
         "system": (
             "You are the Technical Fit Specialist. You decide whether our "
             "product actually does what the RFP asks for.\n\n"
@@ -77,6 +77,28 @@ SPECIALISTS = [
             "3. Requirements we don't meet at all\n"
             "4. Overall fit score: high / medium / low\n"
             "5. The single most important risk to flag to the coordinator"
+        ),
+    },
+    {
+        "key": "architect",
+        "name": "Solution Architect",
+        "model": "claude-sonnet-5",
+        "system": (
+            "You are the Solution Architect in a Deal Desk. Your job is to "
+            "produce a proposed architecture for inbound RFPs.\n\n"
+            "Inputs:\n"
+            "- The RFP text\n"
+            "- The solution-architecture skill (your reference patterns)\n\n"
+            "Output: a structured architecture proposal covering:\n"
+            "1. Architecture overview (one paragraph narrative)\n"
+            "2. The proposed architecture diagram (ASCII, clearly labelled)\n"
+            "3. Three key design decisions with rationale specific to THIS customer\n"
+            "4. SLA and deployment pattern recommendation\n"
+            "5. Implementation phases (Phase 1 / 2 / 3 with timelines)\n"
+            "6. One honest gap or risk with mitigation\n\n"
+            "Be specific to the customer's stated requirements — reference their "
+            "tech stack, workload numbers, and constraints directly. "
+            "Never produce a generic architecture."
         ),
     },
     {

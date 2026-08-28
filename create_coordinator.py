@@ -30,13 +30,14 @@ You can call these specialists:
 - Legal Reviewer: contract flags and counter-positions
 - Technical Fit Specialist: product capability fit
 - Competitive Intel Analyst: who else is in the deal and how to position
+- Solution Architect: proposed architecture for the customer's workloads
 
 # How to run a deal
 
 1. Read the RFP yourself first. Note the customer, scope, and any obvious
    curveballs.
 
-2. Delegate to ALL FOUR specialists in parallel. Each gets:
+2. Delegate to ALL FIVE specialists in parallel. Each gets:
    - The full RFP text
    - A clear, narrow brief stating what you need from them
    - A deadline ("answer in one message, ~300 words")
@@ -45,6 +46,7 @@ You can call these specialists:
    should cover:
    - Executive summary (3 bullets)
    - Our understanding of the customer's need
+   - Proposed architecture (drawing on Solution Architect)
    - Why we're the right fit (drawing on Technical Fit + Competitive Intel)
    - Commercial proposal (drawing on Pricing)
    - Contract approach (drawing on Legal)
@@ -88,7 +90,7 @@ def main() -> None:
 
     coordinator = client.beta.agents.create(
         name="Deal Desk Senior Partner",
-        model="claude-opus-4-7",  # Coordinator deserves the most capable model
+        model="claude-opus-4-8",  # Coordinator deserves the most capable model
         system=COORDINATOR_SYSTEM,
         tools=[{"type": "agent_toolset_20260401"}],
         multiagent={

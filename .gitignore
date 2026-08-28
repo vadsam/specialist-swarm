@@ -1,0 +1,20 @@
+# Runtime / secrets
+.env
+.coordinator_id
+.environment_id
+.last_session_id
+.skill_ids.json
+.specialist_ids.json
+
+# Outputs (generated per run)
+outputs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

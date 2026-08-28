@@ -16,6 +16,18 @@ from pathlib import Path
 
 from anthropic import Anthropic
 
+# Auto-load .env if ANTHROPIC_API_KEY not already set
+if not os.environ.get("ANTHROPIC_API_KEY"):
+    for _d in [Path(__file__).parent, *Path(__file__).parent.parents]:
+        _env = _d / ".env"
+        if _env.exists():
+            for _line in _env.read_text().splitlines():
+                _line = _line.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip())
+            break
+
 
 RFP_PATH = Path("synthetic-data/rfp-acme-corp.md")
 SUPPORTING_FILES = [
@@ -78,6 +90,7 @@ def main() -> None:
     # Stream the events — this is the demo. Watch for parallel thread spawns.
     print("\n=== EVENT STREAM (this is the demo) ===\n")
     final_text_parts: list[str] = []
+    all_replies = 0
 
     with client.beta.sessions.events.stream(session.id) as stream:
         client.beta.sessions.events.send(
@@ -97,6 +110,7 @@ def main() -> None:
                 name = getattr(event, "agent_name", "?")
                 print(f"  [thread running]   {name}", flush=True)
             elif t == "agent.thread_message_received":
+                all_replies += 1
                 print(f"  [reply ←]          {event.from_agent_name}", flush=True)
             elif t == "agent.thread_message_sent":
                 print(f"  [delegate →]       {event.to_agent_name}", flush=True)
@@ -108,8 +122,12 @@ def main() -> None:
             elif t == "agent.tool_use":
                 print(f"\n  [tool: {getattr(event, 'name', '?')}]", flush=True)
             elif t == "session.status_idle":
-                print("\n\n[swarm finished]")
-                break
+                # Don't stop until all specialist replies are in
+                if all_replies >= 5:
+                    print("\n\n[swarm finished]")
+                    break
+                else:
+                    print(f"\n  [idle — waiting for specialists, {all_replies}/5 replied]", flush=True)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     transcript_path = OUTPUT_DIR / "coordinator-transcript.txt"
