@@ -484,16 +484,14 @@ def main() -> None:
 
             st.divider()
 
-            # Specialist detail expanders
+            # Specialist detail expanders — full width to avoid column overflow
             st.markdown("#### Specialist Reports")
-            spec_cols = st.columns(5)
-            for col, name in zip(spec_cols, ALL_SPECIALISTS):
-                with col:
-                    icon = SPECIALIST_ICONS[name]
-                    content = specialist_content.get(name, "")
-                    with st.expander(f"{icon} {name}", expanded=False):
-                        if content:
-                            st.markdown(content)
+            for name in ALL_SPECIALISTS:
+                icon = SPECIALIST_ICONS[name]
+                content = specialist_content.get(name, "")
+                with st.expander(f"{icon} {name}", expanded=False):
+                    if content:
+                        st.markdown(content)
                         else:
                             st.caption("Full analysis included in the downloaded proposal.")
 
