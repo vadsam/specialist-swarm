@@ -1,13 +1,18 @@
 """
-Deal Desk Swarm — Streamlit UI
+Deal Desk Swarm — Streamlit UI (Business Stakeholder Edition)
 
-Upload an RFP, watch the four specialist agents work in parallel,
-then download the generated proposal .docx.
+Replaces raw event log with:
+- Plain-English timeline with elapsed times
+- Deal health banner (Green / Amber / Red)
+- Per-specialist collapsible cards showing reply content
+- Summary bullets extracted from coordinator output
+- .docx download
 """
 
-import io
 import os
+import re
 import tempfile
+import time
 from pathlib import Path
 
 import streamlit as st
@@ -19,7 +24,6 @@ from anthropic import Anthropic
 
 PROJECT_ROOT = Path(__file__).parent.parent
 
-# Load .env — search from project root upward until found
 if not os.environ.get("ANTHROPIC_API_KEY"):
     _search = [PROJECT_ROOT, *PROJECT_ROOT.parents]
     for _d in _search:
@@ -33,14 +37,22 @@ if not os.environ.get("ANTHROPIC_API_KEY"):
             break
 
 SPECIALIST_MAP = {
-    "Pricing Specialist": "Pricing",
-    "Legal Reviewer": "Legal",
-    "Technical Fit Specialist": "Tech Fit",
-    "Solution Architect": "Architect",
+    "Pricing Specialist":        "Pricing",
+    "Legal Reviewer":            "Legal",
+    "Technical Fit Specialist":  "Tech Fit",
+    "Solution Architect":        "Architect",
     "Competitive Intel Analyst": "Competitive",
 }
 
 ALL_SPECIALISTS = ["Pricing", "Legal", "Tech Fit", "Architect", "Competitive"]
+
+SPECIALIST_ICONS = {
+    "Pricing":     "💰",
+    "Legal":       "⚖️",
+    "Tech Fit":    "🔧",
+    "Architect":   "🏗️",
+    "Competitive": "🎯",
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -50,7 +62,7 @@ ALL_SPECIALISTS = ["Pricing", "Legal", "Tech Fit", "Architect", "Competitive"]
 def get_client() -> Anthropic:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        st.error("ANTHROPIC_API_KEY is not set in the environment. Set it and restart.")
+        st.error("ANTHROPIC_API_KEY is not set. Add it to .env and restart.")
         st.stop()
     return Anthropic(
         api_key=api_key,
@@ -60,18 +72,17 @@ def get_client() -> Anthropic:
 
 def load_coordinator_env() -> tuple[str, str]:
     coord_path = PROJECT_ROOT / ".coordinator_id"
-    env_path = PROJECT_ROOT / ".environment_id"
+    env_path   = PROJECT_ROOT / ".environment_id"
     if not coord_path.exists() or not env_path.exists():
         st.error(
-            "Missing `.coordinator_id` or `.environment_id` in project root. "
-            "Run create_specialists.py, upload_skills.py, then create_coordinator.py first."
+            "Missing `.coordinator_id` or `.environment_id`. "
+            "Run create_specialists.py, upload_skills.py, create_coordinator.py first."
         )
         st.stop()
     return coord_path.read_text().strip(), env_path.read_text().strip()
 
 
 def read_uploaded_file(uploaded_file) -> str:
-    """Decode an uploaded file to a UTF-8 string (best-effort)."""
     raw = uploaded_file.read()
     for enc in ("utf-8", "latin-1"):
         try:
@@ -88,19 +99,84 @@ def build_context(rfp_text: str, extras: list[tuple[str, str]]) -> str:
     return "\n\n".join(blocks)
 
 
-def render_cards(holders: dict, statuses: dict) -> None:
-    """Re-render each specialist card placeholder with current status."""
-    icons = {"waiting": "⬜", "running": "🔄", "done": "✅"}
-    labels = {"waiting": "Waiting", "running": "Running…", "done": "Done"}
+def detect_deal_health(text: str) -> tuple[str, str, str]:
+    """Return (colour_hex, emoji, label) based on coordinator output."""
+    lower = text.lower()
+    if any(w in lower for w in ["walk-away", "walk away", "no-go", "decline", "reject"]):
+        return "#c0392b", "🔴", "HIGH RISK — Walk-away conditions present. Review before proceeding."
+    if any(w in lower for w in ["blocker", "hard block", "uncapped liability", "refused"]):
+        return "#e67e22", "🟡", "AMBER — Blockers identified. Negotiation required before signing."
+    return "#27ae60", "🟢", "GREEN — Strong fit. Proceed to negotiation."
+
+
+def extract_summary_bullets(text: str) -> list[str]:
+    """Pull bold-prefixed lines from 'What the desk concluded' section."""
+    match = re.search(
+        r"(?:What the desk concluded|SUMMARY|summary)[:\s\n]+(.+?)(?=\n##|\Z)",
+        text, re.DOTALL | re.IGNORECASE,
+    )
+    section = match.group(1) if match else text
+
+    bullets = re.findall(
+        r"\*\*(.+?)\*\*\s*[—–-]\s*(.+?)(?=\n\n|\n\*\*|\Z)",
+        section, re.DOTALL,
+    )
+    if bullets:
+        return [
+            f"**{title.strip()}** — {body.strip()[:200].rstrip()}"
+            for title, body in bullets[:5]
+        ]
+
+    # Fallback: first 5 non-empty sentences
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if len(s.strip()) > 40]
+    return sentences[:5]
+
+
+# ---------------------------------------------------------------------------
+# Timeline renderer
+# ---------------------------------------------------------------------------
+
+
+def render_timeline(placeholder, events: list[dict]) -> None:
+    if not events:
+        placeholder.empty()
+        return
+    rows = "".join(
+        f"<tr><td style='padding:4px 8px;font-size:18px'>{e['icon']}</td>"
+        f"<td style='padding:4px 12px;color:#888;white-space:nowrap'>{e['elapsed']}</td>"
+        f"<td style='padding:4px 8px'>{e['text']}</td></tr>"
+        for e in events
+    )
+    placeholder.markdown(
+        f"<table style='width:100%;border-collapse:collapse'>{rows}</table>",
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Specialist card renderer
+# ---------------------------------------------------------------------------
+
+
+def render_specialist_cards(holders: dict, statuses: dict, content: dict) -> None:
+    icons_status = {"waiting": "⬜", "running": "🔄", "done": "✅"}
+    labels       = {"waiting": "Waiting", "running": "Analysing…", "done": "Done"}
     for spec, ph in holders.items():
-        s = statuses.get(spec, "waiting")
+        s    = statuses.get(spec, "waiting")
+        icon = SPECIALIST_ICONS.get(spec, "🔍")
         ph.markdown(
-            f"**{spec}**\n\n{icons[s]} {labels[s]}"
+            f"<div style='border:1px solid #ddd;border-radius:8px;padding:12px;text-align:center'>"
+            f"<div style='font-size:28px'>{icon}</div>"
+            f"<div style='font-weight:600;margin:4px 0'>{spec}</div>"
+            f"<div style='font-size:20px'>{icons_status[s]}</div>"
+            f"<div style='color:#666;font-size:13px'>{labels[s]}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
         )
 
 
 # ---------------------------------------------------------------------------
-# Core swarm runner (called once, runs synchronously in the main thread)
+# Core swarm runner
 # ---------------------------------------------------------------------------
 
 
@@ -110,17 +186,21 @@ def run_swarm(
     environment_id: str,
     context_text: str,
     card_holders: dict,
-    log_placeholder,
+    timeline_placeholder,
 ) -> tuple[list[tuple[str, bytes]], str]:
-    """
-    Stream events from the deal-desk session, updating card placeholders live.
+    statuses:            dict[str, str] = {s: "waiting" for s in ALL_SPECIALISTS}
+    specialist_content:  dict[str, str] = {}
+    render_specialist_cards(card_holders, statuses, specialist_content)
 
-    Returns:
-        docx_files  – list of (filename, bytes) for any .docx outputs
-        text_output – concatenated agent.message text (fallback if no docx)
-    """
-    statuses = {s: "waiting" for s in ALL_SPECIALISTS}
-    render_cards(card_holders, statuses)
+    timeline_events: list[dict] = []
+    t0 = time.time()
+
+    def elapsed() -> str:
+        return f"{time.time() - t0:.0f}s"
+
+    def add(icon: str, text: str) -> None:
+        timeline_events.append({"icon": icon, "elapsed": elapsed(), "text": text})
+        render_timeline(timeline_placeholder, timeline_events)
 
     user_message = (
         "An RFP has just landed. Please run the standard Deal Desk process:\n"
@@ -135,31 +215,22 @@ def run_swarm(
         f"{context_text}"
     )
 
-    log_lines: list[str] = []
-
-    def log(msg: str) -> None:
-        log_lines.append(msg)
-        log_placeholder.code("\n".join(log_lines))
-
-    log("Creating session…")
     session = client.beta.sessions.create(
         agent=coordinator_id,
         environment_id=environment_id,
         title="Deal Desk — RFP",
     )
-    log(f"Session: {session.id}")
+    add("🚀", f"Session opened — coordinator ready ({session.id[:16]}…)")
 
     final_text_parts: list[str] = []
 
     with client.beta.sessions.events.stream(session.id) as stream:
         client.beta.sessions.events.send(
             session.id,
-            events=[
-                {
-                    "type": "user.message",
-                    "content": [{"type": "text", "text": user_message}],
-                }
-            ],
+            events=[{
+                "type": "user.message",
+                "content": [{"type": "text", "text": user_message}],
+            }],
         )
 
         for event in stream:
@@ -167,31 +238,40 @@ def run_swarm(
 
             if t == "session.thread_created":
                 agent_name = getattr(event, "agent_name", "")
-                display = SPECIALIST_MAP.get(agent_name)
-                log(f"[thread spawned]  {agent_name or '?'}")
-                if display:
+                display    = SPECIALIST_MAP.get(agent_name, agent_name)
+                add(SPECIALIST_ICONS.get(display, "📤"), f"Dispatched to **{display}**")
+                if display in statuses:
                     statuses[display] = "running"
-                    render_cards(card_holders, statuses)
+                    render_specialist_cards(card_holders, statuses, specialist_content)
 
             elif t == "session.thread_status_running":
                 agent_name = getattr(event, "agent_name", "")
-                display = SPECIALIST_MAP.get(agent_name)
-                log(f"[thread running]  {agent_name or '?'}")
-                if display:
+                display    = SPECIALIST_MAP.get(agent_name, agent_name)
+                if display in statuses and statuses[display] == "waiting":
                     statuses[display] = "running"
-                    render_cards(card_holders, statuses)
+                    render_specialist_cards(card_holders, statuses, specialist_content)
 
             elif t == "agent.thread_message_sent":
                 to_name = getattr(event, "to_agent_name", "")
-                log(f"[delegate ->]     {to_name}")
+                display = SPECIALIST_MAP.get(to_name, to_name)
+                add("📨", f"RFP brief sent to **{display}**")
 
             elif t == "agent.thread_message_received":
                 from_name = getattr(event, "from_agent_name", "")
-                display = SPECIALIST_MAP.get(from_name)
-                log(f"[reply <-]        {from_name}")
-                if display:
+                display   = SPECIALIST_MAP.get(from_name, from_name)
+
+                # Capture reply text if available on this event
+                reply_text = ""
+                for block in getattr(event, "content", []) or []:
+                    if getattr(block, "type", None) == "text":
+                        reply_text += block.text
+                if reply_text and display in ALL_SPECIALISTS:
+                    specialist_content[display] = reply_text
+
+                if display in statuses:
                     statuses[display] = "done"
-                    render_cards(card_holders, statuses)
+                    render_specialist_cards(card_holders, statuses, specialist_content)
+                add("✅", f"**{display}** replied")
 
             elif t == "agent.message":
                 for block in getattr(event, "content", []):
@@ -199,21 +279,21 @@ def run_swarm(
                         final_text_parts.append(block.text)
 
             elif t == "agent.tool_use":
-                log(f"[tool]            {getattr(event, 'name', '?')}")
+                tool_name = getattr(event, "name", "tool")
+                if tool_name in ("bash", "computer"):
+                    add("⚙️", f"Coordinator running: `{tool_name}`")
 
             elif t == "session.status_idle":
-                # Only stop when all specialists have reported back
                 all_done = all(statuses[s] == "done" for s in ALL_SPECIALISTS)
                 if all_done:
-                    log("[swarm finished]")
-                    render_cards(card_holders, statuses)
+                    add("🏁", "All specialists replied — synthesis in progress…")
                     break
                 else:
-                    still_waiting = [s for s in ALL_SPECIALISTS if statuses[s] != "done"]
-                    log(f"[idle — waiting for: {', '.join(still_waiting)}]")
+                    waiting = [s for s in ALL_SPECIALISTS if statuses[s] != "done"]
+                    add("⏳", f"Still waiting for: {', '.join(waiting)}")
 
-    # Attempt to pull any files the agents produced
-    log("Checking for file deliverables…")
+    add("📄", "Checking for deliverable files…")
+
     docx_files: list[tuple[str, bytes]] = []
     try:
         files = client.beta.files.list(
@@ -221,21 +301,19 @@ def run_swarm(
             betas=["managed-agents-2026-04-01"],
         )
         for f in files.data:
-            log(f"  found: {f.filename}")
             if f.filename.lower().endswith(".docx"):
-                # write_to_file is the reliable way to grab binary content
                 with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
                     tmp_path = tmp.name
-                content_obj = client.beta.files.download(f.id)
-                content_obj.write_to_file(tmp_path)
+                client.beta.files.download(f.id).write_to_file(tmp_path)
                 with open(tmp_path, "rb") as fh:
                     docx_bytes = fh.read()
                 Path(tmp_path).unlink(missing_ok=True)
                 docx_files.append((f.filename, docx_bytes))
+                add("📥", f"Proposal ready: `{f.filename}`")
     except Exception as exc:
-        log(f"  ERROR listing files: {type(exc).__name__}: {exc}")
+        add("⚠️", f"File retrieval error: {type(exc).__name__}: {exc}")
 
-    return docx_files, "".join(final_text_parts)
+    return docx_files, "".join(final_text_parts), specialist_content
 
 
 # ---------------------------------------------------------------------------
@@ -250,71 +328,72 @@ def main() -> None:
         layout="wide",
     )
 
-    st.title("Deal Desk Swarm")
-    st.caption("Powered by four specialist agents running in parallel via the Anthropic Agent SDK.")
-
-    # -----------------------------------------------------------------------
-    # Section 1: File uploaders
-    # -----------------------------------------------------------------------
-    st.header("1. Upload RFP")
-
-    rfp_file = st.file_uploader(
-        "RFP document (required)",
-        type=["md", "txt", "pdf"],
-        key="rfp",
-        help="The main request-for-proposal you want to respond to.",
-    )
-
-    st.subheader("Supporting documents (optional)")
-    supporting_files = st.file_uploader(
-        "Past wins, product overview, pricing sheets, etc.",
-        type=["md", "txt", "pdf", "json"],
-        accept_multiple_files=True,
-        key="supporting",
-        help="Any extra context for the specialists. Leave empty to use default synthetic-data/ files.",
+    st.title("📋 Deal Desk Swarm")
+    st.caption(
+        "Five specialist agents — Pricing, Legal, Tech Fit, Solution Architect, "
+        "Competitive Intel — analyse your RFP in parallel and produce a branded proposal."
     )
 
     # -----------------------------------------------------------------------
-    # Section 2: Progress board (always visible, cards start empty)
+    # Upload
     # -----------------------------------------------------------------------
-    st.header("2. Specialist Progress")
+    with st.expander("1. Upload RFP", expanded=True):
+        rfp_file = st.file_uploader(
+            "RFP document (required)", type=["md", "txt", "pdf"], key="rfp",
+        )
+        supporting_files = st.file_uploader(
+            "Supporting documents — past wins, pricing sheets, product overview (optional)",
+            type=["md", "txt", "pdf", "json"],
+            accept_multiple_files=True,
+            key="supporting",
+        )
 
+    # -----------------------------------------------------------------------
+    # Specialist progress board
+    # -----------------------------------------------------------------------
+    st.markdown("### 2. Specialist Progress")
     cols = st.columns(5)
-    card_holders: dict[str, st.delta_generator.DeltaGenerator] = {}
+    card_holders: dict[str, object] = {}
     for col, name in zip(cols, ALL_SPECIALISTS):
         with col:
-            st.markdown(f"### {name}")
             card_holders[name] = st.empty()
-            card_holders[name].markdown("⬜ Waiting")
+            card_holders[name].markdown(
+                f"<div style='border:1px solid #ddd;border-radius:8px;padding:12px;text-align:center'>"
+                f"<div style='font-size:28px'>{SPECIALIST_ICONS[name]}</div>"
+                f"<div style='font-weight:600;margin:4px 0'>{name}</div>"
+                f"<div style='font-size:20px'>⬜</div>"
+                f"<div style='color:#666;font-size:13px'>Waiting</div></div>",
+                unsafe_allow_html=True,
+            )
 
     # -----------------------------------------------------------------------
-    # Section 3: Run button
+    # Run button
     # -----------------------------------------------------------------------
-    st.header("3. Run")
-
-    run_clicked = st.button("Run Deal Desk Swarm", type="primary", disabled=(rfp_file is None))
-
+    st.markdown("### 3. Run")
+    run_clicked = st.button(
+        "Run Deal Desk Swarm", type="primary", disabled=(rfp_file is None)
+    )
     if rfp_file is None:
         st.info("Upload an RFP document above to enable the run button.")
 
     # -----------------------------------------------------------------------
-    # Event log area (shown during/after run)
+    # Timeline (always visible, populated during run)
     # -----------------------------------------------------------------------
-    log_placeholder = st.empty()
+    st.markdown("### 4. Live Progress")
+    timeline_placeholder = st.empty()
 
     # -----------------------------------------------------------------------
-    # Result area
+    # Results area
     # -----------------------------------------------------------------------
-    result_area = st.empty()
+    results_area = st.container()
 
     # -----------------------------------------------------------------------
-    # Run the swarm when the button is clicked
+    # Swarm execution
     # -----------------------------------------------------------------------
     if run_clicked and rfp_file is not None:
         client = get_client()
         coordinator_id, environment_id = load_coordinator_env()
 
-        # Build context text
         rfp_text = read_uploaded_file(rfp_file)
         extras: list[tuple[str, str]] = []
 
@@ -322,7 +401,6 @@ def main() -> None:
             for sf in supporting_files:
                 extras.append((sf.name, read_uploaded_file(sf)))
         else:
-            # Fall back to synthetic-data/ files
             for default_path in [
                 PROJECT_ROOT / "synthetic-data" / "past-wins.json",
                 PROJECT_ROOT / "synthetic-data" / "product-overview.md",
@@ -332,40 +410,75 @@ def main() -> None:
 
         context_text = build_context(rfp_text, extras)
 
-        with st.spinner("Swarm running — streaming events…"):
+        with st.spinner("Swarm running…"):
             try:
-                docx_files, text_output = run_swarm(
+                docx_files, text_output, specialist_content = run_swarm(
                     client,
                     coordinator_id,
                     environment_id,
                     context_text,
                     card_holders,
-                    log_placeholder,
+                    timeline_placeholder,
                 )
             except Exception as exc:
                 st.error(f"Swarm failed: {exc}")
                 st.stop()
 
-        st.success("Swarm finished!")
+        # -------------------------------------------------------------------
+        # Results
+        # -------------------------------------------------------------------
+        with results_area:
+            st.success("Swarm complete!")
 
-        # ------------------------------------------------------------------
-        # Section 4: Download
-        # ------------------------------------------------------------------
-        st.header("4. Download Proposal")
+            # Deal health banner
+            colour, emoji, label = detect_deal_health(text_output)
+            st.markdown(
+                f"<div style='background:{colour};color:white;padding:16px 20px;"
+                f"border-radius:8px;font-size:18px;font-weight:600;margin:16px 0'>"
+                f"{emoji}&nbsp;&nbsp;{label}</div>",
+                unsafe_allow_html=True,
+            )
 
-        if docx_files:
-            for filename, docx_bytes in docx_files:
-                result_area.download_button(
-                    label=f"Download {filename}",
-                    data=docx_bytes,
-                    file_name=filename,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                )
-        elif text_output.strip():
-            st.info("No .docx file was produced. Showing coordinator text output below.")
-            result_area.markdown(text_output)
-        else:
-            st.warning("The swarm produced no output. Check the event log above.")
+            # Summary bullets
+            bullets = extract_summary_bullets(text_output)
+            if bullets:
+                st.markdown("#### Key Findings")
+                for b in bullets:
+                    st.markdown(f"- {b}")
+
+            st.divider()
+
+            # Specialist detail expanders
+            st.markdown("#### Specialist Reports")
+            spec_cols = st.columns(5)
+            for col, name in zip(spec_cols, ALL_SPECIALISTS):
+                with col:
+                    icon = SPECIALIST_ICONS[name]
+                    content = specialist_content.get(name, "")
+                    with st.expander(f"{icon} {name}", expanded=False):
+                        if content:
+                            st.markdown(content)
+                        else:
+                            st.caption("Full analysis included in the downloaded proposal.")
+
+            st.divider()
+
+            # Download
+            st.markdown("#### Download Proposal")
+            if docx_files:
+                for filename, docx_bytes in docx_files:
+                    st.download_button(
+                        label=f"⬇️  Download {filename}",
+                        data=docx_bytes,
+                        file_name=filename,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                    )
+            elif text_output.strip():
+                st.info("No .docx file retrieved — showing full proposal text below.")
+                st.markdown(text_output)
+            else:
+                st.warning("The swarm produced no output. Check the timeline above.")
 
 
 if __name__ == "__main__":
